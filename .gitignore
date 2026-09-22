@@ -28,3 +28,4 @@ android-widget/local.properties
 android-widget/**/build/
 *.jks
 *.keystore
+.tmp-go

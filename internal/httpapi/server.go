@@ -38,15 +38,16 @@ type contextKey string
 const principalKey contextKey = "principal"
 
 type Server struct {
-	store    *store.Store
-	engine   *engine.Engine
-	logger   *slog.Logger
-	assets   fs.FS
-	handler  http.Handler
-	mu       sync.Mutex
-	limits   map[string]*rateWindow
-	passkeys map[string]passkeySession
-	build    BuildInfo
+	store        *store.Store
+	engine       *engine.Engine
+	logger       *slog.Logger
+	assets       fs.FS
+	handler      http.Handler
+	mu           sync.Mutex
+	limits       map[string]*rateWindow
+	passkeys     map[string]passkeySession
+	build        BuildInfo
+	extraRegions []domain.Region
 }
 
 type BuildInfo struct {
@@ -69,16 +70,20 @@ type rateWindow struct {
 	count int
 }
 
-func New(st *store.Store, eng *engine.Engine, assets fs.FS, logger *slog.Logger, build ...BuildInfo) *Server {
+func New(st *store.Store, eng *engine.Engine, assets fs.FS, logger *slog.Logger, extraRegions []domain.Region, build ...BuildInfo) *Server {
 	info := BuildInfo{Version: "dev", Commit: "unknown", BuiltAt: "unknown"}
 	if len(build) > 0 {
 		info = build[0]
 	}
-	s := &Server{store: st, engine: eng, assets: assets, logger: logger, limits: make(map[string]*rateWindow), passkeys: make(map[string]passkeySession), build: info}
+	if extraRegions == nil {
+		extraRegions = []domain.Region{}
+	}
+	s := &Server{store: st, engine: eng, assets: assets, logger: logger, limits: make(map[string]*rateWindow), passkeys: make(map[string]passkeySession), build: info, extraRegions: extraRegions}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /readyz", s.ready)
 	mux.HandleFunc("GET /api/v1/system/init-status", s.initStatus)
+	mux.HandleFunc("GET /api/v1/regions", s.regions)
 	mux.Handle("GET /api/v1/system/info", s.require("admin", http.HandlerFunc(s.systemInfo)))
 	mux.HandleFunc("POST /api/v1/setup", s.setup)
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
@@ -132,6 +137,12 @@ func (s *Server) initStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"initialized": initialized})
+}
+
+// regions exposes the extra region list loaded from regions.json at startup so
+// the web UI can merge it with its built-in region options.
+func (s *Server) regions(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"regions": s.extraRegions})
 }
 
 func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {

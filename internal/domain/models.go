@@ -111,6 +111,14 @@ type AccountSummary struct {
 	BillingError   string    `json:"billing_error,omitempty"`
 }
 
+// Region is a selectable region option for the web UI. The built-in list lives in
+// web/src/App.tsx; additional entries can be supplied at runtime via regions.json
+// in the data directory and are merged with the built-in list by the frontend.
+type Region struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
 type Job struct {
 	ID          string    `json:"id"`
 	Type        string    `json:"type"`

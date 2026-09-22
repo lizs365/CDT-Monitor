@@ -38,16 +38,21 @@ type Engine struct {
 	workers      int
 	started      sync.Once
 	accountLocks sync.Map
+	extraRegions map[string]string
 }
 
 var ErrMonitorBusy = errors.New("monitor scheduler lease is held by another process")
 
-func New(st *store.Store, provider aliyun.Provider, notifier *notify.Service, logger *slog.Logger, workers int) *Engine {
+func New(st *store.Store, provider aliyun.Provider, notifier *notify.Service, logger *slog.Logger, workers int, extraRegions ...domain.Region) *Engine {
 	if workers < 1 {
 		workers = 4
 	}
 	owner, _ := security.NewToken(12)
-	return &Engine{store: st, provider: provider, notify: notifier, logger: logger, owner: owner, wake: make(chan struct{}, 1), workers: workers}
+	names := make(map[string]string, len(extraRegions))
+	for _, region := range extraRegions {
+		names[region.Value] = region.Label
+	}
+	return &Engine{store: st, provider: provider, notify: notifier, logger: logger, owner: owner, wake: make(chan struct{}, 1), workers: workers, extraRegions: names}
 }
 
 func (e *Engine) Start(ctx context.Context) {
@@ -563,7 +568,7 @@ func (e *Engine) Summary(ctx context.Context) ([]domain.AccountSummary, time.Tim
 	for _, account := range config.Accounts {
 		percentage := usagePercent(account.TrafficUsed, account.MaxTraffic)
 		item := domain.AccountSummary{
-			ID: account.ID, Account: masked(account.AccessKeyID), Remark: account.Remark, Region: account.RegionID, RegionName: RegionName(account.RegionID),
+			ID: account.ID, Account: masked(account.AccessKeyID), Remark: account.Remark, Region: account.RegionID, RegionName: e.regionName(account.RegionID),
 			FlowTotal: account.MaxTraffic, FlowUsed: math.Round(account.TrafficUsed*100) / 100, Percentage: percentage, Threshold: config.TrafficThreshold,
 			OverThreshold: percentage >= float64(config.TrafficThreshold), InstanceStatus: account.InstanceStatus, LastUpdated: account.UpdatedAt,
 			Stale: account.UpdatedAt.IsZero() || time.Since(account.UpdatedAt) > time.Duration(max(config.APIInterval*2, 180))*time.Second,
@@ -597,6 +602,18 @@ func RegionName(region string) string {
 		"cn-shenzhen": "华南 1（深圳）", "cn-heyuan": "华南 2（河源）", "cn-guangzhou": "华南 3（广州）", "cn-chengdu": "西南 1（成都）", "ap-northeast-1": "日本（东京）", "ap-northeast-2": "韩国（首尔）",
 	}
 	if name := names[region]; name != "" {
+		return name
+	}
+	return region
+}
+
+// regionName resolves a region to its display name, falling back to extra
+// regions loaded from regions.json when the built-in table has no entry.
+func (e *Engine) regionName(region string) string {
+	if name := RegionName(region); name != region {
+		return name
+	}
+	if name := e.extraRegions[region]; name != "" {
 		return name
 	}
 	return region

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,13 +11,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 	_ "time/tzdata"
 
 	"github.com/wang4386/CDT-Monitor/internal/aliyun"
+	"github.com/wang4386/CDT-Monitor/internal/domain"
 	"github.com/wang4386/CDT-Monitor/internal/engine"
 	"github.com/wang4386/CDT-Monitor/internal/httpapi"
 	"github.com/wang4386/CDT-Monitor/internal/notify"
@@ -71,7 +75,8 @@ func main() {
 
 	provider := aliyun.NewClient()
 	notifier := notify.New()
-	eng := engine.New(st, provider, notifier, logger, *workers)
+	extraRegions := loadExtraRegions(*dataDir, logger)
+	eng := engine.New(st, provider, notifier, logger, *workers, extraRegions...)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	eng.Start(ctx)
@@ -97,7 +102,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	api := httpapi.New(st, eng, web.FS(), logger, httpapi.BuildInfo{Version: version, Commit: commit, BuiltAt: builtAt})
+	api := httpapi.New(st, eng, web.FS(), logger, extraRegions, httpapi.BuildInfo{Version: version, Commit: commit, BuiltAt: builtAt})
 	server := &http.Server{
 		Addr: *listen, Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20,
@@ -121,6 +126,40 @@ func envOr(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// loadExtraRegions reads regions.json from the data directory. The file is
+// optional: a missing file is ignored, while a malformed file is reported and
+// skipped so the built-in region list still works.
+func loadExtraRegions(dataDir string, logger *slog.Logger) []domain.Region {
+	path := filepath.Join(dataDir, "regions.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			logger.Error("read regions config", "path", path, "error", err)
+		}
+		return nil
+	}
+	var parsed []domain.Region
+	if err = json.Unmarshal(data, &parsed); err != nil {
+		logger.Error("parse regions config", "path", path, "error", err)
+		return nil
+	}
+	seen := make(map[string]bool, len(parsed))
+	regions := make([]domain.Region, 0, len(parsed))
+	for _, region := range parsed {
+		region.Value = strings.TrimSpace(region.Value)
+		region.Label = strings.TrimSpace(region.Label)
+		if region.Value == "" || region.Label == "" || seen[region.Value] || len(regions) >= 100 {
+			continue
+		}
+		seen[region.Value] = true
+		regions = append(regions, region)
+	}
+	if len(regions) > 0 {
+		logger.Info("loaded extra regions", "path", path, "count", len(regions))
+	}
+	return regions
 }
 func envInt(key string, fallback int) int {
 	if value, err := strconv.Atoi(os.Getenv(key)); err == nil && value > 0 {

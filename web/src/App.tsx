@@ -22,13 +22,27 @@ type SelectPosition = { left: number; top: number; width: number; maxHeight: num
 
 const HistoryChart = lazy(() => import('./HistoryChart'))
 
-const regions: SelectOption[] = [
+const builtinRegions: SelectOption[] = [
   ['cn-hongkong', '中国香港'], ['cn-hangzhou', '华东 1（杭州）'], ['cn-shanghai', '华东 2（上海）'],
   ['cn-qingdao', '华北 1（青岛）'], ['cn-beijing', '华北 2（北京）'], ['cn-zhangjiakou', '华北 3（张家口）'],
   ['cn-huhehaote', '华北 5（呼和浩特）'], ['cn-wulanchabu', '华北 6（乌兰察布）'], ['cn-shenzhen', '华南 1（深圳）'],
   ['cn-heyuan', '华南 2（河源）'], ['cn-guangzhou', '华南 3（广州）'], ['cn-chengdu', '西南 1（成都）'],
   ['ap-southeast-1', '新加坡'], ['ap-northeast-1', '日本（东京）'], ['ap-northeast-2', '韩国（首尔）'], ['us-west-1', '美国（硅谷）'], ['us-east-1', '美国（弗吉尼亚）'],
 ].map(([value, label]) => ({ value, label, meta: value }))
+
+// 运行时从服务端加载的额外地域（数据目录 regions.json），与内置列表合并去重后使用
+let extraRegions: SelectOption[] = []
+
+function allRegions(): SelectOption[] {
+  const seen = new Set(builtinRegions.map((item) => item.value))
+  const merged = [...builtinRegions]
+  for (const item of extraRegions) {
+    if (!item.value || !item.label || seen.has(item.value)) continue
+    seen.add(item.value)
+    merged.push({ value: item.value, label: item.label, meta: item.value })
+  }
+  return merged
+}
 
 const refreshIntervals: SelectOption[] = [
   { value: '60', label: '1 分钟' }, { value: '300', label: '5 分钟' }, { value: '600', label: '10 分钟' },
@@ -45,6 +59,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [adminOpen, setAdminOpen] = useState(false)
   const [historyAccount, setHistoryAccount] = useState<AccountSummary | null>(null)
+  const [, bumpRegions] = useState(0)
 
   const notify = useCallback((message: string, tone: Toast['tone'] = 'info') => {
     const id = Date.now() + Math.random()
@@ -90,6 +105,20 @@ export default function App() {
       }
     })()
   }, [loadDashboard])
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const data = await api<{ regions: { value: string; label: string }[] }>('/api/v1/regions')
+        if (Array.isArray(data.regions)) {
+          extraRegions = data.regions.map((item) => ({ value: item.value, label: item.label }))
+          bumpRegions((current) => current + 1)
+        }
+      } catch {
+        // 额外地域配置不可用时回退到内置列表
+      }
+    })()
+  }, [])
 
   useEffect(() => {
     if (phase !== 'dashboard') return
@@ -465,7 +494,7 @@ function AccountFields({ account, onChange, compact = false }: { account: Accoun
     <Field label="AccessKey ID"><input autoComplete="off" value={account.access_key_id} onChange={(event) => onChange({ ...account, access_key_id: event.target.value })} placeholder="LTAI5t…" /></Field>
     <Field label={`AccessKey Secret${account.secret_configured ? ' · 已配置' : ''}`}><input type="password" autoComplete="new-password" value={account.access_key_secret || ''} onChange={(event) => onChange({ ...account, access_key_secret: event.target.value })} placeholder={account.secret_configured ? '留空保持不变' : '输入 Secret'} /></Field>
     <Field label="实例 ID"><input value={account.instance_id} onChange={(event) => onChange({ ...account, instance_id: event.target.value })} placeholder="i-bp…" /></Field>
-    <SelectField label="地域" value={account.region_id} options={regions} searchable searchPlaceholder="搜索地域名称或代码" onChange={(value) => onChange({ ...account, region_id: value })} />
+    <SelectField label="地域" value={account.region_id} options={allRegions()} searchable searchPlaceholder="搜索地域名称或代码" onChange={(value) => onChange({ ...account, region_id: value })} />
     <Field label="流量额度"><input type="number" min={1} value={account.max_traffic} onChange={(event) => onChange({ ...account, max_traffic: Number(event.target.value) })} /><span className="suffix">GB</span></Field>
     <SelectField label="站点类型" value={account.site_type} options={[{ value: 'china', label: '中国站', meta: 'CNY' }, { value: 'international', label: '国际站', meta: 'USD' }]} onChange={(value) => onChange({ ...account, site_type: value as Account['site_type'] })} />
     <Field label="备注"><input value={account.remark} onChange={(event) => onChange({ ...account, remark: event.target.value })} placeholder="香港主节点" /></Field>
